@@ -1,14 +1,18 @@
 import type {
-	FnStmt,
-	RetStmt,
-	CallExpr,
 	BinOpExpr,
+	CallExpr,
+	Expr,
+	ExprStmt,
+	FnStmt,
 	IdentExpr,
+	LetStmt,
 	LitExpr,
 	Program,
+	RetStmt,
 } from "./ast.js";
 
 const paramRegs32 = ["edi", "esi", "edx", "ecx", "r8d", "r9d"];
+const paramRegs64 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
 export default function genX64(ast: Program): string {
 	const output: string[] = [];
@@ -33,23 +37,39 @@ export default function genX64(ast: Program): string {
 		output.push("\tmov\trbp, rsp"); // Set base pointer to current stack
 
 		// Allocate space for local variables
-		output.push(`\tsub\trsp, ${Math.ceil(fn.params.length / 4) * 16}`);
+		let localSize = 0;
+		for (const param of fn.params) {
+			localSize += 4; // Assuming 32-bit integers
+			locals.set(param, localSize);
+		}
+		for (const stmt of fn.body) {
+			if (stmt.type === "let") {
+				localSize += 4; // Assuming 32-bit integers
+				locals.set(stmt.name, localSize);
+			}
+		}
+		// Align stack to 16 bytes
+		output.push(`\tsub\trsp, ${Math.ceil(localSize / 16) * 16}`);
 
 		// Push parameters onto the stack
+		if (paramRegs32.length < fn.params.length) {
+			throw new Error(`Too many parameters for function ${fn.name}`);
+		}
 		fn.params.forEach((param, index) => {
-			locals.set(param, index * 4);
-			if (index < paramRegs32.length) {
-				output.push(
-					`\tmov\tdword ptr [rbp - ${index * 4 + 4}], ${paramRegs32[index]}`,
-				);
-			} else {
-				throw new Error(`Too many parameters for function ${fn.name}`);
+			const offset = locals.get(param);
+			if (offset === undefined) {
+				throw new Error(`Local variable ${param} not found`);
 			}
+			output.push(`\tmov\tdword ptr [rbp - ${offset}], ${paramRegs32[index]}`);
 		});
 
 		// Emit function body
 		for (const bodyStmt of fn.body) {
-			if (bodyStmt.type === "return") {
+			if (bodyStmt.type === "let") {
+				emitLet32(bodyStmt);
+			} else if (bodyStmt.type === "expr") {
+				emitExpr32(bodyStmt.expr);
+			} else if (bodyStmt.type === "return") {
 				emitRet32(bodyStmt);
 			}
 		}
@@ -60,18 +80,32 @@ export default function genX64(ast: Program): string {
 		output.push("\tpop\trbp"); // Restore base pointer
 		output.push("\tret");
 
-		function emitRet32(ret: RetStmt): void {
-			if (ret.expr.type === "call") {
-				emitCall32(ret.expr);
-			} else if (ret.expr.type === "binary") {
-				emitBinOp32(ret.expr);
-			} else if (ret.expr.type === "identifier") {
-				emitIdent32(ret.expr);
-			} else if (ret.expr.type === "literal") {
-				emitLit32(ret.expr);
+		function emitExpr32(expr: Expr): void {
+			if (expr.type === "call") {
+				emitCall32(expr);
+			} else if (expr.type === "binary") {
+				emitBinOp32(expr);
+			} else if (expr.type === "identifier") {
+				emitIdent32(expr);
+			} else if (expr.type === "literal") {
+				emitLit32(expr);
 			} else {
-				throw new Error("Unsupported return expression type");
+				throw new Error("Unsupported expression type in statement");
 			}
+		}
+
+		function emitLet32(let_: LetStmt): void {
+			const offset = locals.get(let_.name);
+			if (offset === undefined) {
+				throw new Error(`Local variable ${let_.name} not found`);
+			}
+			emitExpr32(let_.expr);
+			// Move the result of the expression into the local variable
+			output.push(`\tmov\tdword ptr [rbp - ${offset}], eax`);
+		}
+
+		function emitRet32(ret: RetStmt): void {
+			emitExpr32(ret.expr);
 			output.push("\tmov\trsp, rbp"); // Restore stack pointer
 			output.push("\tpop\trbp"); // Restore base pointer
 			output.push("\tret");
@@ -79,32 +113,21 @@ export default function genX64(ast: Program): string {
 
 		function emitCall32(call: CallExpr): void {
 			output.push(`\t# Begin function call to ${call.callee}`);
-
 			if (paramRegs32.length < call.args.length) {
 				throw new Error(`Too many arguments for function ${call.callee}`);
 			}
 
 			// Prepare arguments
-			call.args.forEach((arg, index) => {
-				if (arg.type === "call") {
-					emitCall32(arg);
-				} else if (arg.type === "binary") {
-					emitBinOp32(arg);
-				} else if (arg.type === "identifier") {
-					emitIdent32(arg);
-				} else if (arg.type === "literal") {
-					emitLit32(arg);
-				} else {
-					throw new Error("Unsupported argument type in call");
-				}
-				// Move argument to the appropriate register
-				output.push(`\tmov\t${paramRegs32[index]}, eax`);
-			});
+			for (const arg of call.args) {
+				emitExpr32(arg);
+				output.push("\tpush\trax"); // Push argument onto stack
+			}
+			for (let i = call.args.length - 1; i >= 0; i--) {
+				output.push(`\tpop\t${paramRegs64[i]}`); // Pop argument
+			}
 
 			// Call the function
 			output.push(`\tcall\t${call.callee}`);
-			output.push("\tpush\trax"); // Push return value onto stack
-
 			output.push(`\t# End function call to ${call.callee}`);
 		}
 
@@ -113,34 +136,17 @@ export default function genX64(ast: Program): string {
 
 			if (bin.operator === "-") {
 				// Move left operand
-				if (bin.left.type === "call") {
-					emitCall32(bin.left);
-				} else if (bin.left.type === "binary") {
-					emitBinOp32(bin.left);
-				} else if (bin.left.type === "identifier") {
-					emitIdent32(bin.left);
-				} else if (bin.left.type === "literal") {
-					emitLit32(bin.left);
-				}
-				// Move result to r10d
-				output.push("\tmov\tr10d, eax");
+				emitExpr32(bin.left);
+				output.push("\tpush\trax"); // Save left operand
 
 				// Move right operand
-				if (bin.right.type === "call") {
-					emitCall32(bin.right);
-				} else if (bin.right.type === "binary") {
-					emitBinOp32(bin.right);
-				} else if (bin.right.type === "identifier") {
-					emitIdent32(bin.right);
-				} else if (bin.right.type === "literal") {
-					emitLit32(bin.right);
-				}
+				emitExpr32(bin.right);
 				// Move result to r11d
 				output.push("\tmov\tr11d, eax");
 
 				// Perform subtraction
-				output.push("\tsub\tr10d, r11d");
-				output.push("\tmov\teax, r10d"); // Move result to eax for return
+				output.push("\tpop\trax"); // Get left operand
+				output.push("\tsub\teax, r11d"); // Subtract right operand
 			} else {
 				throw new Error(`Unsupported operator: ${bin.operator}`);
 			}
@@ -149,14 +155,11 @@ export default function genX64(ast: Program): string {
 		}
 
 		function emitIdent32(expr: IdentExpr): void {
-			if (!locals.has(expr.name)) {
-				throw new Error(`Local variable ${expr.name} not found`);
-			}
 			const offset = locals.get(expr.name);
 			if (offset === undefined) {
 				throw new Error(`Local variable ${expr.name} not found`);
 			}
-			output.push(`\tmov\teax, dword ptr [rbp - ${offset + 4}]`);
+			output.push(`\tmov\teax, dword ptr [rbp - ${offset}]`);
 		}
 
 		function emitLit32(expr: LitExpr): void {

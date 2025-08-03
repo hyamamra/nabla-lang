@@ -49,42 +49,49 @@ const ast: Program = {
 					},
 				},
 			],
-		},
-		// int main() { return sub(dec(1) - 1, 2); }
+		}, // int main() { let x = sub(5, 1 - dec(3)); return x; }
 		{
 			type: "function",
 			name: "main",
 			params: [],
 			body: [
 				{
-					type: "return",
+					type: "let",
+					name: "x",
 					expr: {
 						type: "call",
 						callee: "sub",
 						args: [
 							{
+								type: "literal",
+								value: 5,
+							},
+							{
 								type: "binary",
 								operator: "-",
 								left: {
+									type: "literal",
+									value: 1,
+								},
+								right: {
 									type: "call",
 									callee: "dec",
 									args: [
 										{
 											type: "literal",
-											value: 5,
+											value: 3,
 										},
 									],
 								},
-								right: {
-									type: "literal",
-									value: 1,
-								},
-							},
-							{
-								type: "literal",
-								value: 2,
 							},
 						],
+					},
+				},
+				{
+					type: "return",
+					expr: {
+						type: "identifier",
+						name: "x",
 					},
 				},
 			],

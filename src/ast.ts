@@ -1,4 +1,4 @@
-export type Stmt = FnStmt | RetStmt;
+export type Stmt = FnStmt | RetStmt | LetStmt | ExprStmt;
 
 export type Expr = CallExpr | BinOpExpr | IdentExpr | LitExpr;
 
@@ -11,6 +11,17 @@ export interface FnStmt {
 
 export interface RetStmt {
 	type: "return";
+	expr: Expr;
+}
+
+export interface LetStmt {
+	type: "let";
+	name: string;
+	expr: Expr;
+}
+
+export interface ExprStmt {
+	type: "expr";
 	expr: Expr;
 }
 
