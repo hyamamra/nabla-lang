@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "native",
+      "name": "nabla",
       "devDependencies": {
         "@types/bun": "latest",
       },
