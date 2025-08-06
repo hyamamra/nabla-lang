@@ -24,6 +24,11 @@ where
 }
 ```
 
+main.cをアセンブリに変換するには、以下のコマンドを使用します。
+```bash
+clang -S -O0 -masm=intel main.c
+```
+
 ## 呼び出し元保存（caller-saved）レジスタ
 
 rax - 戻り値（第1）
