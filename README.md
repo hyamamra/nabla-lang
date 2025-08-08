@@ -1,32 +1,98 @@
 # ∇ Nabla lang
 
 ```rs
-// `< ... >` というブロックは単なるジェネリクスではなく、それらの値がコンパイル時計算に使用されることを意味する。
-// コンパイル時計算であるため、型を値として扱うことができる。型自体の型名はtype。
-//
-// nat型は自然数を意味し、32ビット環境では32ビット符号なし整数、64ビット環境では64ビット符号なし整数と同等。
-// `*[T * N]` はN個のT型を持つ固定長配列へのポインタ。
-fn get<T: type, N: nat>(arr: *[T * N], index: nat) -> Option<T> {
-    if index < N {
-        return Some(arr[index]);
-    } else {
-        return None;
-    }
+impl<T, const N: usize> [N]T {
+    // 通常の配列アクセス
+    fn get(self, i: usize) -> Option<T> {
+        if i < N {
+            Some(self[i])
+        } else {
+            None
+        }
+    }
+
+    // インデックスが安全な値であることが保証されているため、分岐処理を削除できる
+    fn checked_get<const I: usize { i: i < N }>(self) -> T {
+        self[I]
+    }
 }
 
-// インデックスもコンパイル時計算する。
-fn get_by_const<T: type, N, I>(arr: *[T * N]) -> T
-where
-    { N: nat, I: nat | I < N } // コンパイル時計算でIが0以上N未満であることを保証。
-{
-    // 境界チェックを実施せず、直接ポインタ演算で該当の値を返す最速の実装。
-    return arr[I];
+impl usize {
+    // ゼロ除算が発生しないことを保証
+    fn checked_mod<const D: usize { d: 0 < d }>(self) -> usize {
+        self % D
+    }
+}
+
+// const typeでコンパイル時計算専用の洗練型を定義できる
+const type Even = usize { u: u % 2 == 0 };
+```
+
+## Low-level IR (target-independent)
+独自の中間表現（IR）を持ち、LLVMのようなターゲット非依存の低レベルIRを使用。
+```rs
+// 階差の絶対値（距離）
+fn distance(a: i32, b: i32) -> i32 {
+    if a > b { a - b } else { b - a }
 }
 ```
+```
+@distance(%0 i32, %1 i32) i32 {
+#0:
+	jif gt i32 %0, %1, #1, #2
+#1:
+	%2 = sub i32 %0, %1
+	jmp #3
+#2:
+	%3 = sub i32 %1, %0
+	jmp #3
+#3:
+	%4 = phi i32 (%2, #1), (%3, #2)
+	ret i32 %4
+}
+```
+
+## 処理順序
+### ターゲット依存変換開始前
+1. SelectionDAG構築 - IRをDAG表現に変換
+2. Legalization - ターゲットがサポートしない型・演算を分解
+3. DAG Combine (pre-legalize) - DAGレベルの最適化
+4. Type Legalization - データ型の正規化
+5. DAG Combine (post-legalize) - 再度の最適化
+
+### 命令選択
+1. Instruction Selection - DAGからターゲット命令への変換
+2. Scheduling (pre-RA) - 基本ブロック内での命令順序決定
+3. SSA解体 - φ関数の除去
+
+### レジスタ割り当て
+1. Live Variable Analysis - 変数の生存期間解析
+2. Live Interval Analysis - 生存区間の計算
+3. Register Coalescing - 仮想レジスタの統合
+4. Register Allocation - 物理レジスタ割り当て（グラフ彩色等）
+5. Spill Code Insertion - 必要に応じてメモリ退避コード挿入
+6. Virtual Register Rewriter - 仮想レジスタを物理レジスタに置換
+
+### ポストRA最適化
+1. Post-RA Scheduling - レジスタ割り当て後の命令スケジューリング
+2. Peephole Optimization - 局所的な命令パターン最適化
+3. Branch Optimization - 分岐命令の最適化
+4. Tail Duplication - 末尾重複による分岐削減
+5. Machine Copy Propagation - 不要なmov命令削除
+
+### 最終段階
+1. Prologue/Epilogue Insertion - 関数の前処理・後処理追加
+2. Frame Index Elimination - スタックフレーム参照の解決
+3. Branch Relaxation - 長距離分岐の処理
+4. Assembly Printing - アセンブリコード出力
 
 main.cをアセンブリに変換するには、以下のコマンドを使用します。
 ```bash
 clang -S -O0 -masm=intel main.c
+```
+main.cをLLVM IRに変換するには、以下のコマンドを使用します。
+```bash
+clang -S -O0 -emit-llvm main.c
 ```
 
 ## 呼び出し元保存（caller-saved）レジスタ
